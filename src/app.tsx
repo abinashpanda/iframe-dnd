@@ -1,13 +1,13 @@
-import { HomeIcon } from 'lucide-react'
-import { Button } from '@/components/ui/button'
+import { createBrowserRouter, RouterProvider } from 'react-router-dom'
+import Home from './pages/home'
 
 export default function App() {
-  return (
-    <div className="p-4">
-      <Button icon={<HomeIcon />} size="sm">
-        Dashboard
-      </Button>
-      <Button icon={<HomeIcon />} size="icon-sm" />
-    </div>
-  )
+  return <RouterProvider router={router} />
 }
+
+const router = createBrowserRouter([
+  {
+    path: '/',
+    element: <Home />,
+  },
+])
