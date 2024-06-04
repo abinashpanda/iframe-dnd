@@ -1,5 +1,14 @@
 import { createLazyFileRoute } from '@tanstack/react-router'
-import { DndContext, useDndContext, useDraggable, DragOverlay, useDroppable } from '@dnd-kit/core'
+import {
+  DndContext,
+  useDndContext,
+  useDraggable,
+  DragOverlay,
+  useDroppable,
+  CollisionDetection,
+  rectIntersection,
+  closestCenter,
+} from '@dnd-kit/core'
 import { z } from 'zod'
 import { forwardRef, useEffect, useMemo, useState } from 'react'
 import { match } from 'ts-pattern'
@@ -7,14 +16,48 @@ import FrameComponent from 'react-frame-component'
 import { DashboardIcon } from '@radix-ui/react-icons'
 import { useMeasure } from '@uidotdev/usehooks'
 import { cn } from '@/lib/utils'
+import { Select, SelectTrigger, SelectValue, SelectItem, SelectContent } from '@/components/ui/select'
 
 export const Route = createLazyFileRoute('/')({
   component: Home,
 })
 
+const SIZES = [480, 768, 1024, 1440, 1800] as const
+type Size = (typeof SIZES)[number]
+
+const CANVAS_DROPPABLE_CONTAINER_ID = 'canvas-container'
+const COLLISION_THRESHOLD = 600
+
+const collisonDetection: CollisionDetection = ({ droppableContainers, active, ...args }) => {
+  const activeId = active.id.toString()
+
+  if (activeId.startsWith('draggable')) {
+    const rectIntersectionCollisions = rectIntersection({
+      ...args,
+      droppableContainers: droppableContainers.filter(({ id }) => id === CANVAS_DROPPABLE_CONTAINER_ID),
+      active,
+    })
+
+    if (rectIntersectionCollisions.length === 0) {
+      return []
+    }
+
+    const collisions = closestCenter({
+      ...args,
+      droppableContainers: droppableContainers.filter(({ id }) => id !== CANVAS_DROPPABLE_CONTAINER_ID),
+      active,
+    })
+    return collisions.filter((collision) => collision.data?.value < COLLISION_THRESHOLD)
+  }
+
+  return []
+}
+
 function Home() {
+  const [canvasSize, setCanvasSize] = useState<Size>(1440)
+
   return (
-    <DndContext>
+    <DndContext collisionDetection={collisonDetection}>
       <div className="flex h-screen">
         <div className="w-[320px] overflow-auto border-r bg-background p-4">
           <div className="grid grid-cols-2 gap-4">
@@ -23,8 +66,29 @@ function Home() {
             })}
           </div>
         </div>
-        <div className="flex-1 flex-col overflow-hidden bg-muted p-4">
-          <Canvas className="flex-1" />
+        <div className="h-screen w-[calc(100vw-320px)] space-y-4 overflow-hidden bg-muted p-4">
+          <div className="flex h-12 items-center justify-end">
+            <Select
+              value={canvasSize.toString()}
+              onValueChange={(sizeSelected) => {
+                setCanvasSize(parseInt(sizeSelected) as Size)
+              }}
+            >
+              <SelectTrigger className="w-40 bg-background">
+                <SelectValue placeholder="Canvas width" />
+              </SelectTrigger>
+              <SelectContent>
+                {SIZES.map((size) => {
+                  return (
+                    <SelectItem key={size} value={size.toString()}>
+                      {size}px
+                    </SelectItem>
+                  )
+                })}
+              </SelectContent>
+            </Select>
+          </div>
+          <Canvas canvasSize={canvasSize} className="h-[calc(100%-64px)]" />
         </div>
       </div>
       <Overlay />
@@ -47,7 +111,7 @@ type DraggableProps = {
 
 function Draggable({ id, index, className, style }: DraggableProps) {
   const { setNodeRef, attributes, listeners } = useDraggable({
-    id,
+    id: `draggable-${id}`,
     data: {
       type: 'draggable',
       id,
@@ -67,7 +131,7 @@ type BaseDraggableProps = Omit<React.ComponentProps<'div'>, 'children'> & {
 const BaseDraggable = forwardRef<React.ElementRef<'div'>, BaseDraggableProps>(({ index, className, ...rest }, ref) => {
   return (
     <div
-      className={cn('flex aspect-square items-center justify-center border bg-background', className)}
+      className={cn('flex aspect-square select-none items-center justify-center border bg-background', className)}
       {...rest}
       ref={ref}
     >
@@ -115,29 +179,61 @@ function usePageStyles() {
 }
 
 type CanvasProps = {
-  containerWidth?: number
+  canvasSize?: number
   className?: string
   style?: React.CSSProperties
 }
 
-function Canvas({ containerWidth = 1800, className, style }: CanvasProps) {
+function Canvas({ canvasSize = 1800, className, style }: CanvasProps) {
   const pageStyles = usePageStyles()
-  const [ref, { width }] = useMeasure()
+  const [ref, { width, height }] = useMeasure()
+
+  const scale = useMemo(() => {
+    return (width ?? 0) / Math.max(canvasSize, width ?? 0)
+  }, [width, canvasSize])
+  const canvasHeight = useMemo(() => {
+    if (height) {
+      return (height - 32) / scale
+    }
+    return undefined
+  }, [height, scale])
 
   return (
     <div className={cn('h-full w-full', className)} ref={ref} style={style}>
-      <FrameComponent
-        className="h-full w-full origin-top-left overflow-hidden border bg-background"
-        initialContent={`<!DOCTYPE html><html><head><style>${pageStyles}</style></head><body><div id="mountPoint"></div></body></html>`}
-        mountTarget="#mountPoint"
+      <div
+        className="mx-auto flex h-8 items-center gap-2 rounded-t-md border-l border-r border-t px-2"
         style={{
-          width: containerWidth,
-          transform: `scale(${(width ?? 0) / containerWidth})`,
+          width: Math.min(canvasSize, width ?? 0),
         }}
       >
-        <div className="h-full overflow-auto">
+        <div className="h-2.5 w-2.5 rounded-full bg-red-500" />
+        <div className="h-2.5 w-2.5 rounded-full bg-yellow-500" />
+        <div className="h-2.5 w-2.5 rounded-full bg-green-500" />
+      </div>
+      <FrameComponent
+        className="mx-auto origin-top-left overflow-hidden border bg-background"
+        initialContent={`
+        <!DOCTYPE html>
+        <html>
+          <head>
+            <style>${pageStyles}</style>
+            <style>.frame-content { width: 100%; height: 100%; }</style>
+          </head>
+          <body>
+            <div id="mountPoint" class="h-screen"></div>
+          </body>
+        </html>
+        `}
+        mountTarget="#mountPoint"
+        style={{
+          width: canvasSize,
+          height: canvasHeight,
+          transform: `scale(${scale})`,
+        }}
+      >
+        <CanvasDroppable className={cn('h-full w-full overflow-auto')} style={{ transform: 'translate3d(0, 0, 0)' }}>
           <Droppable id="droppable-1" />
-        </div>
+        </CanvasDroppable>
       </FrameComponent>
     </div>
   )
@@ -151,21 +247,40 @@ type DroppableProps = {
 
 function Droppable({ id, className, style }: DroppableProps) {
   const { setNodeRef, isOver } = useDroppable({
-    id,
+    id: `droppable-${id}`,
   })
 
   return (
     <div
       ref={setNodeRef}
       className={cn(
-        'flex items-center justify-center gap-2 px-4 py-2 text-xs shadow-inner',
-        isOver ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground',
+        isOver
+          ? 'flex items-center justify-center gap-2 bg-primary px-4 py-2 text-xs text-primary-foreground shadow-inner'
+          : 'h-0',
         className,
       )}
       style={style}
     >
-      <DashboardIcon className="h-5 w-5" />
-      <div>Drop Here</div>
+      {isOver ? (
+        <>
+          <DashboardIcon className="h-5 w-5" />
+          <div>Drop Here</div>
+        </>
+      ) : null}
+    </div>
+  )
+}
+
+type CanvasDroppableProps = React.ComponentProps<'div'>
+
+function CanvasDroppable({ children, className, style }: CanvasDroppableProps) {
+  const { setNodeRef } = useDroppable({
+    id: CANVAS_DROPPABLE_CONTAINER_ID,
+  })
+
+  return (
+    <div ref={setNodeRef} className={className} style={style}>
+      {children}
     </div>
   )
 }
